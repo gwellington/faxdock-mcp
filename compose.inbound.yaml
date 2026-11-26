@@ -1,0 +1,14 @@
+services:
+  faxdock:
+    command: ["telnyx-fax", "webhook"]
+    environment:
+      TELNYX_WEBHOOK_BIND_ADDRESS: "0.0.0.0"
+      TELNYX_WEBHOOK_PUBLIC_KEY: ${TELNYX_WEBHOOK_PUBLIC_KEY:?Set the Telnyx webhook signing public key in .env}
+    ports:
+      - "127.0.0.1:${TELNYX_WEBHOOK_HOST_PORT:-8787}:8787"
+    healthcheck:
+      test: ["CMD", "telnyx-fax", "healthcheck"]
+      interval: 10s
+      timeout: 4s
+      start_period: 3s
+      retries: 3

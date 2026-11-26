@@ -1,0 +1,12 @@
+/.env
+/.env.*
+!/.env.example
+/.telnyx-key-ref
+/.telnyx-service-key-ref
+/compose.override.yaml
+/compose.override.yml
+/inbox/
+/outbox/
+/target/
+*.pdf
+.DS_Store
