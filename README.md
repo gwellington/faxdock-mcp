@@ -1,14 +1,20 @@
 # FaxDock MCP
 
-Self-hosted Telnyx faxing for MCP clients. Stage a PDF, preview the exact file and recipient, send it directly to Telnyx, and track delivery. One Alpine container runs the Rust binary. The MCP client connects locally over standard input and output. You can also enable an incoming fax inbox.
+Send a local PDF through Telnyx and check delivery from an MCP client. FaxDock runs in one Alpine container and connects to your client over stdio. Receiving faxes is optional.
 
 ## Why I built it
 
-I needed to fax a sensitive form I already had as a PDF. Paying for a one-off upload service felt excessive, and I wanted to know where the document went and whether it arrived. FaxDock keeps the PDF in a local outbox until submission and uploads it directly to Telnyx without hosting a download URL.
+I already had the PDF and needed to send one fax. I was looking at about $5 for a single page. I wanted to send it straight to the carrier and be able to check whether it arrived.
 
 ## Set up outbound faxing
 
-You need Docker with Compose and a Telnyx Fax API application with a fax-capable number and outbound voice profile. [Telnyx Fax API setup](https://developers.telnyx.com/docs/programmable-fax/send-a-fax-api)
+### 1. Set up Telnyx
+
+In Telnyx Mission Control, create a Programmable Fax application, assign it a fax-capable number, and attach an Outbound Voice Profile. Create a V2 API key and save it in your credential store. Keep the assigned number and the Fax application ID handy. [Telnyx fax quickstart](https://developers.telnyx.com/docs/programmable-fax/quickstart) · [Create an API key](https://developers.telnyx.com/docs/programmable-fax/send-a-fax-api#step-2-api-authentication)
+
+### 2. Start the container
+
+On the machine running your MCP client, install Git and Docker with Compose v2. Use a trusted local Docker context. It receives the Telnyx key when the launcher connects and provides the mounted fax folders. [Docker bind mounts](https://docs.docker.com/engine/storage/bind-mounts/)
 
 ```sh
 git clone https://github.com/gwellington/faxdock-mcp.git
@@ -16,21 +22,37 @@ cd faxdock-mcp
 (umask 077; cp .env.example .env; mkdir -p inbox outbox)
 ```
 
-Set `TELNYX_FAX_FROM` to the assigned number in E.164 format and `TELNYX_FAX_CONNECTION_ID` to the application ID in `.env`. On Linux, use `id -u` and `id -g` to look up the non-root owner of your bind-mounted folders, then set those values as `FAX_UID` and `FAX_GID`.
+Fill in these values in `.env`.
+
+| Variable | Value |
+| --- | --- |
+| `TELNYX_FAX_FROM` | The assigned number in E.164 format, for example `+12025550100`. |
+| `TELNYX_FAX_CONNECTION_ID` | The numeric ID of the Programmable Fax application. |
+
+On Linux, set `FAX_UID` and `FAX_GID` in `.env` to the non-root owner of `inbox/` and `outbox/`. If you created the folders as your own user, get the values with `id -u` and `id -g`.
 
 ```sh
 docker compose up -d --build --wait
+docker compose ps
 ```
 
-### Configure your credential provider
+The `faxdock` service should be running with no published ports. If you run multiple copies on the same Docker host, set a different `COMPOSE_PROJECT_NAME` in each checkout's `.env`.
 
-With 1Password, save your Telnyx V2 API key in a password field and put only its secret reference in `.telnyx-key-ref` with mode `0600`. The host launcher uses `op read` with your configured 1Password authentication. [1Password CLI secret references](https://developer.1password.com/docs/cli/secret-references/)
+### 3. Connect the credential store
 
-With another credential store, set `FAX_KEY_COMMAND` in the MCP launch environment to the absolute path of an executable that prints the key to stdout and takes no arguments. The launcher passes the key over stdin to the MCP process. Keep it out of the Compose environment, image, and command-line arguments.
+**1Password.** Install and sign in to the `op` CLI on the host. Copy the secret reference for the field containing the Telnyx key. Replace the placeholder below with that reference, then run these commands from the checkout. The last command checks that 1Password can resolve it without displaying the key. [1Password CLI secret references](https://www.1password.dev/cli/secret-references)
 
-### Connect an MCP client
+```sh
+(umask 077; printf '%s\n' 'op://VAULT/ITEM/FIELD' > .telnyx-key-ref)
+chmod 600 .telnyx-key-ref
+op read "$(cat .telnyx-key-ref)" > /dev/null
+```
 
-Use `start-fax-mcp.sh` as a local stdio launcher. For Codex, use the following configuration with the absolute path to your checkout.
+**Other credential stores.** Set `FAX_KEY_COMMAND` in the MCP launch environment to the absolute path of an executable that prints the key to stdout. FaxDock runs it with no arguments. Keep the key in the credential store. The launcher passes it to the MCP process over stdin.
+
+### 4. Connect your MCP client
+
+In Codex, add this block to `~/.codex/config.toml` and replace the example path with the absolute path to your checkout. Start a new session after saving. [Codex MCP setup](https://developers.openai.com/codex/mcp)
 
 ```toml
 [mcp_servers.telnyx_fax]
@@ -41,35 +63,44 @@ default_tools_approval_mode = "writes"
 omit_tools_from = ["code_mode"]
 ```
 
-The launcher uses `docker` and `op` from `PATH`. If your client has a restricted `PATH`, set `FAX_DOCKER_BIN` and `FAX_OP_BIN` to their absolute paths in the launch environment. The launcher uses the active Docker context.
+If you're using a credential helper, add the following table under the same server entry. You can also set `FAX_DOCKER_BIN` or `FAX_OP_BIN` here if Codex can't find those commands on its `PATH`.
 
-**Configure your MCP client to require human approval before `fax_send` and `fax_cancel`.** FaxDock checks the preview and file contents. The client is responsible for asking the human and enforcing their decision.
+```toml
+[mcp_servers.telnyx_fax.env]
+FAX_KEY_COMMAND = "/absolute/path/to/read-telnyx-key"
+```
 
-### Send and track a fax
+For other clients, launch `/bin/sh /absolute/path/to/faxdock-mcp/start-fax-mcp.sh` over stdio. **Require human approval for `fax_send` and `fax_cancel` in the client.** FaxDock checks that the send matches the preview. The client enforces approval. The Codex example prompts on writes and keeps these tools out of Code Mode. [Codex configuration reference](https://developers.openai.com/codex/config-reference)
 
-1. Run `fax_account_check` to verify Telnyx authentication and outbound configuration.
-2. Place a PDF, such as `request.pdf`, in `outbox/`. Run `fax_preview` with the exact filename and verified receiving number.
-3. Review the proposed send and approve `fax_send`. The preview expires after ten minutes and binds the filename, bytes, and destination within that MCP session.
-4. Use `fax_status` to check for `delivered`. If the submission result is uncertain, check `fax_history` before attempting another send. After a `fax_cancel` request, check `fax_status` for the outcome.
+Run `fax_account_check`. For outbound faxing, look for `authenticated`, `application_active`, and `outbound_profile_configured` all set to `true`. This check makes a read-only call to Telnyx.
+
+## Send a fax
+
+1. Put the PDF in `outbox/`. Use a simple filename such as `request.pdf` and keep it at or below 20 MB.
+2. Verify the fax number with the recipient. Ask your client to run `fax_preview` with the filename and number in E.164 format, then show you the result. Preview checks the file header, size, and number format.
+3. Approve `fax_send` after reviewing the filename and number. The ten-minute preview binds the exact file bytes and recipient and is valid for one send attempt in the same session.
+4. Use `fax_status` to check for `delivered`. If the submission result is uncertain, check `fax_history` before trying again. After requesting cancellation, check `fax_status` for the outcome.
+
+FaxDock uploads the file directly to Telnyx and leaves the local copy in `outbox/`.
 
 ## Enable incoming faxes
 
-The standard setup publishes no ports. To receive faxes, use the supplied Tailscale Funnel configuration with Docker Engine 28 or newer. [Docker port publishing](https://docs.docker.com/engine/network/port-publishing/) · [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel)
+Receiving uses the same container and requires Tailscale Funnel and Docker Engine 28 or newer. [Docker port publishing](https://docs.docker.com/engine/network/port-publishing/) · [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel)
 
 1. Uncomment `COMPOSE_FILE=compose.yaml:compose.inbound.yaml` in `.env` and set `TELNYX_WEBHOOK_PUBLIC_KEY` to the Telnyx webhook signing public key.
-2. Run `docker compose up -d --wait` to start the receiver in the same container.
-3. Publish the webhook route through Funnel. Set the resulting HTTPS URL ending in `/telnyx/webhook` on the Telnyx Fax API application.
+2. Run `docker compose up -d --wait` to start the receiver.
+3. Run the Funnel command below. In the Fax application's inbound settings, set the webhook URL to the resulting public HTTPS URL ending in `/telnyx/webhook`.
 
 ```sh
 tailscale funnel --bg --https=443 --set-path=/telnyx/webhook http://127.0.0.1:8787/telnyx/webhook
 ```
 
-If you set `TELNYX_WEBHOOK_HOST_PORT` in `.env`, use that port in the Funnel target. Keep the published Docker port on loopback. The receiver trusts Funnel to set the forwarding headers and verifies the Telnyx source IP, signature, and timestamp before using the event.
+If you set `TELNYX_WEBHOOK_HOST_PORT` in `.env`, use that port in the Funnel target. Keep the Docker port bound to loopback so the receiver can trust Funnel's forwarding headers. The receiver also checks the Telnyx source IP, signature, and timestamp.
 
-FaxDock downloads a validated inbound PDF to `inbox/<fax-id>.pdf`. Use `fax_inbox` for local file metadata or `fax_history` with `direction: "inbound"` for Telnyx records. Control access to the Docker daemon and host folders, and manage retention and backups for `inbox/` and `outbox/`. Telnyx processes the PDFs for transmission and reception. [Telnyx inbound fax documentation](https://developers.telnyx.com/docs/programmable-fax/receive-a-fax-api)
+Incoming PDFs land in `inbox/<fax-id>.pdf`. Use `fax_inbox` to list local files or `fax_history` with `direction: "inbound"` to see records at Telnyx. Restrict access to the host folders and Docker daemon. Files in both folders stay there until you remove them. [Telnyx inbound fax documentation](https://developers.telnyx.com/docs/programmable-fax/receive-a-fax-api)
 
 ## Test and license
 
-Run `docker build --target test .` to exercise the preview and direct upload, webhook signature, and inbox safeguards with synthetic data and a local mock API.
+Run `docker build --target test .` to test sends, previews, webhook signatures, and inbox storage with synthetic data and a local mock API.
 
 FaxDock is an independent project. Its source is available under the [MIT license](LICENSE).

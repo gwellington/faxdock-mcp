@@ -134,7 +134,7 @@ fn tool(
 pub fn fax_schemas() -> [Value; 7] {
     let destination = json!({
         "file": {"type": "string", "pattern": PDF_NAME, "description": "Exact PDF filename in the local outbox."},
-        "to": {"type": "string", "pattern": PHONE, "description": "Verified receiving fax number in E.164 format."}
+        "to": {"type": "string", "pattern": PHONE, "description": "Receiving fax number in E.164 format. Confirm the number with the recipient."}
     });
     let id = json!({"type": "string", "pattern": UUID, "description": "Telnyx fax ID."});
     let page = json!({"type": "integer", "minimum": 1, "maximum": 10_000, "description": "Page number, starting at 1."});
@@ -143,7 +143,7 @@ pub fn fax_schemas() -> [Value; 7] {
     [
         tool(
             "fax_preview",
-            "Check a staged PDF and destination locally. Returns a preview ID for user review before sending.",
+            "Check a staged PDF and fax number format. Returns a preview ID for review before sending.",
             destination,
             &["file", "to"],
             true,

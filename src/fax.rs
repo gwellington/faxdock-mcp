@@ -63,7 +63,7 @@ pub struct FaxTools {
 impl FaxTools {
     pub fn new(line: FaxLine, api_key: &str) -> reqwest::Result<Self> {
         let authorization = if api_key.is_empty() {
-            Err("The Telnyx API key is unavailable. Configure its 1Password reference and reopen Codex.".into())
+            Err("The Telnyx API key is unavailable. Check the launcher configuration and reconnect your MCP client.".into())
         } else if !KEY.is_match(api_key) {
             Err("The Telnyx API key has an invalid format.".into())
         } else {
